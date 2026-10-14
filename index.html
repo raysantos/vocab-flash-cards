@@ -91,12 +91,16 @@ h1 .s { background: linear-gradient(transparent 60%, var(--pencil) 60%); padding
 }
 .small-btn:hover { border-color: var(--accent); }
 
-.meta { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: .92rem; font-variant-numeric: tabular-nums; }
+.meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; white-space: nowrap; color: var(--muted); font-size: .92rem; font-variant-numeric: tabular-nums; }
 .bar { flex: 1; height: 8px; background: var(--chip); border-radius: 99px; margin-left: 12px; overflow: hidden; max-width: 220px; }
 .bar span { display: block; height: 100%; background: var(--good); width: 0; transition: width .3s; }
 
 /* The index card */
-.stage { perspective: 1400px; }
+.stage-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.stage { perspective: 1400px; min-width: 0; }
+.card { touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.card.dragging { transition: none; }
+.card.snap { transition: transform .5s cubic-bezier(.3,.7,.3,1), translate .2s ease-out; }
 .card {
   position: relative; width: 100%; min-height: 330px; cursor: pointer;
   transform-style: preserve-3d; transition: transform .5s cubic-bezier(.3,.7,.3,1);
@@ -152,11 +156,16 @@ h1 .s { background: linear-gradient(transparent 60%, var(--pencil) 60%); padding
 .say:hover { border-color: var(--accent); color: var(--accent); }
 .say svg { width: 20px; height: 20px; }
 
-.study { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 10px; }
-.nav, .judge {
+.study { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.judge {
   font: 700 1rem var(--body); border-radius: 12px; padding: 14px 12px; cursor: pointer; border: 2px solid transparent;
 }
-.nav { background: var(--card); color: var(--ink); border-color: var(--rule); min-width: 52px; }
+.nav {
+  width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; padding: 0; cursor: pointer;
+  background: var(--card); color: var(--ink); border: 2px solid var(--rule); box-shadow: var(--shadow);
+}
+.nav:hover { border-color: var(--accent); color: var(--accent); }
+.nav svg { width: 22px; height: 22px; }
 .judge.learn { background: var(--card); color: var(--warn); border-color: var(--warn); }
 .judge.know { background: var(--good); color: #fff; }
 :root[data-theme="dark"] .judge.know { color: #0c1a12; }
@@ -173,8 +182,9 @@ button:focus-visible { outline: 3px solid var(--pencil); outline-offset: 2px; }
 .keys { color: var(--muted); font-size: .82rem; text-align: center; margin: 0; }
 
 @media (max-width: 460px) {
-  .study { grid-template-columns: 1fr 1fr; }
-  .nav.prev { order: 3; } .nav.next { order: 4; }
+  .stage-row { gap: 6px; }
+  .nav { width: 36px; height: 36px; }
+  .nav svg { width: 18px; height: 18px; }
   .card { min-height: 360px; }
 }
 @media (prefers-reduced-motion: reduce) { .card { transition: none; } .bar span { transition: none; } }
@@ -211,11 +221,15 @@ button:focus-visible { outline: 3px solid var(--pencil); outline-offset: 2px; }
     </span>
   </div>
 
-  <div class="stage" id="stage">
-    <button class="card" id="card" aria-label="Flashcard, press to flip">
-      <div class="face front" id="front"></div>
-      <div class="face back" id="back"></div>
-    </button>
+  <div class="stage-row" id="stage">
+    <button class="nav prev" id="prev" aria-label="Previous card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <div class="stage">
+      <button class="card" id="card" aria-label="Flashcard, press to flip">
+        <div class="face front" id="front"></div>
+        <div class="face back" id="back"></div>
+      </button>
+    </div>
+    <button class="nav next" id="next" aria-label="Next card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>
   </div>
 
   <div class="done" id="done" hidden>
@@ -225,12 +239,10 @@ button:focus-visible { outline: 3px solid var(--pencil); outline-offset: 2px; }
   </div>
 
   <div class="study" id="study">
-    <button class="nav prev" id="prev" aria-label="Previous card">←</button>
     <button class="judge learn" id="learn">Still learning</button>
     <button class="judge know" id="know">Got it!</button>
-    <button class="nav next" id="next" aria-label="Next card">→</button>
   </div>
-  <p class="keys">Keyboard: Space flips · ← → move · 1 still learning · 2 got it</p>
+  <p class="keys">Swipe or tap the arrows to move · Keyboard: Space flips · ← → move · 1 still learning · 2 got it</p>
 </div>
 
 <script>
@@ -378,7 +390,42 @@ function mark(isKnown){
   store.set("gs-known", [...known]); flipped = false; render();
 }
 
+// Swipe left or right on the card to move between cards.
+let swipe = null, swiped = false;
+const cardEl = $("card");
+cardEl.addEventListener("pointerdown", e => {
+  if (e.button !== 0 || e.target.closest("[data-say]")) return;
+  swipe = { x: e.clientX, y: e.clientY, id: e.pointerId, dx: 0, active: false };
+});
+cardEl.addEventListener("pointermove", e => {
+  if (!swipe || e.pointerId !== swipe.id) return;
+  const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
+  if (!swipe.active && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) {
+    swipe.active = true; cardEl.classList.add("dragging");
+    try { cardEl.setPointerCapture(e.pointerId); } catch (_) {}
+  }
+  if (swipe.active) { swipe.dx = dx; cardEl.style.translate = dx + "px 0"; }
+});
+function endSwipe(e) {
+  if (!swipe || (e && e.pointerId !== swipe.id)) return;
+  const { dx, active } = swipe; swipe = null;
+  cardEl.classList.remove("dragging");
+  if (!active) return;
+  swiped = true; setTimeout(() => { swiped = false; }, 0);
+  if (Math.abs(dx) > 60) {
+    const dir = dx < 0 ? 1 : -1;
+    cardEl.style.translate = "";
+    go(dir);
+  } else {
+    cardEl.classList.add("snap"); cardEl.style.translate = "";
+    setTimeout(() => cardEl.classList.remove("snap"), 220);
+  }
+}
+cardEl.addEventListener("pointerup", endSwipe);
+cardEl.addEventListener("pointercancel", endSwipe);
+
 $("card").addEventListener("click", e => {
+  if (swiped) { swiped = false; return; }
   if (e.target.closest("[data-say]")) { e.stopPropagation(); speak(); return; }
   flip();
 });
